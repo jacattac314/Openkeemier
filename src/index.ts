@@ -9,6 +9,7 @@ import { logger } from './logger.js';
 import { app, startSlackApp } from './gateway/slackApp.js';
 import { registerMessageHandlers } from './gateway/messageHandler.js';
 import { registerHitlApp, requestApproval } from './gateway/hitl.js';
+import { registerStatusCommand } from './gateway/statusCommand.js';
 import { runAgent } from './agent/agentRunner.js';
 import { initializeMcpServers, disconnectAllServers } from './agent/mcpClient.js';
 import { startHeartbeat, stopHeartbeat } from './heartbeat/heartbeatRunner.js';
@@ -47,6 +48,9 @@ async function main(): Promise<void> {
 
   // 3. Register HITL with Bolt app
   registerHitlApp(app);
+
+  // 3b. Register slash commands
+  registerStatusCommand(app);
 
   // 4. Register message handlers
   registerMessageHandlers(app, async ({ userId, channelId, text, say }) => {
