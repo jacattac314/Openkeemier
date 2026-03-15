@@ -1,9 +1,14 @@
 import { z } from 'zod';
 
 const ConfigSchema = z.object({
-  SLACK_BOT_TOKEN: z.string().min(1),
-  SLACK_APP_TOKEN: z.string().min(1),
-  SLACK_SIGNING_SECRET: z.string().min(1),
+  // Twilio WhatsApp
+  TWILIO_ACCOUNT_SID: z.string().min(1),
+  TWILIO_AUTH_TOKEN: z.string().min(1),
+  TWILIO_WHATSAPP_FROM: z.string().min(1),
+  WEBHOOK_PORT: z.coerce.number().default(3000),
+  WEBHOOK_PATH: z.string().default('/whatsapp/webhook'),
+
+  // Anthropic
   ANTHROPIC_API_KEY: z.string().min(1),
   DEFAULT_MODEL: z.string().default('claude-sonnet-4-6'),
   HEARTBEAT_MODEL: z.string().default('claude-haiku-4-5-20251001'),
