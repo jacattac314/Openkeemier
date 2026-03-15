@@ -1,6 +1,6 @@
 /**
  * OpenKeemier — Entry Point
- * Wires all subsystems: Slack Gateway, Agent Core, Memory, Heartbeat.
+ * Wires all subsystems: Slack Gateway, Agent Core, Memory, Heartbeat, Dev Team.
  */
 
 import 'node:process';
@@ -12,6 +12,9 @@ import { registerHitlApp, requestApproval } from './gateway/hitl.js';
 import { runAgent } from './agent/agentRunner.js';
 import { initializeMcpServers, disconnectAllServers } from './agent/mcpClient.js';
 import { startHeartbeat, stopHeartbeat } from './heartbeat/heartbeatRunner.js';
+import { runOrchestrator } from './devteam/orchestrator.js';
+import { formatJobResultBlocks } from './devteam/slackReporter.js';
+import { registerDevTeamTools } from './devteam/localTools.js';
 
 // Global error handlers
 process.on('unhandledRejection', (reason) => {
@@ -23,51 +26,96 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
+/** Detect if the message is a dev team task (starts with /dev or @devteam). */
+function isDevTeamRequest(text: string): boolean {
+  const lower = text.trim().toLowerCase();
+  return lower.startsWith('/dev ') || lower.startsWith('@devteam ');
+}
+
+function stripDevTeamPrefix(text: string): string {
+  return text.trim().replace(/^\/dev\s+|^@devteam\s+/i, '');
+}
+
 async function main(): Promise<void> {
   logger.info({ version: '0.1.0', model: config.DEFAULT_MODEL }, 'OpenKeemier starting');
 
   // 1. Initialize MCP servers
   await initializeMcpServers(config.MCP_SERVERS);
 
-  // 2. Register HITL with Bolt app
+  // 2. Register dev team local tools
+  registerDevTeamTools();
+
+  // 3. Register HITL with Bolt app
   registerHitlApp(app);
 
-  // 3. Register message handlers
+  // 4. Register message handlers
   registerMessageHandlers(app, async ({ userId, channelId, text, say }) => {
-    try {
-      const result = await runAgent({
-        userId,
-        channelId,
-        userText: text,
-        requestApproval: async (toolName, args, rationale) => {
-          const decision = await requestApproval({
-            toolName,
-            toolArgs: args,
-            rationale,
-            requestedBy: userId,
-            channelId,
-          });
-          return decision.approved;
-        },
-        onChunk: (chunk) => {
-          logger.trace({ userId, chunkLength: chunk.length }, 'Response chunk');
-        },
-      });
+    if (isDevTeamRequest(text)) {
+      // Route to orchestrator
+      const taskText = stripDevTeamPrefix(text);
 
-      await say(result.response);
-    } catch (err) {
-      logger.error({ userId, channelId, err }, 'Agent run failed');
-      await say('Sorry, I encountered an error. Please try again.');
+      await say(`⚙️ *Dev team activated.* Planning: _${taskText.slice(0, 100)}_…`);
+
+      try {
+        const result = await runOrchestrator({
+          userId,
+          channelId,
+          userMessage: taskText,
+          requestApproval: async (toolName, args, rationale) => {
+            const decision = await requestApproval({
+              toolName,
+              toolArgs: args,
+              rationale,
+              requestedBy: userId,
+              channelId,
+            });
+            return decision.approved;
+          },
+        });
+
+        // Post rich Block Kit report
+        await app.client.chat.postMessage({
+          channel: channelId,
+          text: result.summary,
+          blocks: formatJobResultBlocks(result),
+        });
+      } catch (err) {
+        logger.error({ userId, channelId, err }, 'Dev team job failed');
+        await say(`❌ Dev team encountered an error: ${String(err)}`);
+      }
+    } else {
+      // Route to generic agent
+      try {
+        const result = await runAgent({
+          userId,
+          channelId,
+          userText: text,
+          requestApproval: async (toolName, args, rationale) => {
+            const decision = await requestApproval({
+              toolName,
+              toolArgs: args,
+              rationale,
+              requestedBy: userId,
+              channelId,
+            });
+            return decision.approved;
+          },
+        });
+
+        await say(result.response);
+      } catch (err) {
+        logger.error({ userId, channelId, err }, 'Agent run failed');
+        await say('Sorry, I encountered an error. Please try again.');
+      }
     }
   });
 
-  // 4. Start Slack Socket Mode
+  // 5. Start Slack Socket Mode
   await startSlackApp();
 
-  // 5. Start heartbeat engine
+  // 6. Start heartbeat engine
   startHeartbeat(async (action) => {
-    logger.info({ action }, 'Heartbeat triggered action — implement proactive messaging here');
-    // TODO: Route heartbeat actions to appropriate Slack channel
+    logger.info({ action }, 'Heartbeat triggered action');
   });
 
   logger.info('OpenKeemier fully initialized and listening');
